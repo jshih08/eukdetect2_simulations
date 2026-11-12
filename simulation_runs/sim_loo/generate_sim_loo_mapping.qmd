@@ -1,0 +1,28 @@
+
+```{r}
+library(cowplot)
+library(httpgd)
+library(gt)
+library(tidyverse)
+library(fs)
+library(yardstick)
+library(RColorBrewer)
+library(vroom)
+
+
+vroom("simulation_runs/sim_all_euk_genome_mixtures/all_euk_genome_mapping.csv") %>%
+    filter(
+        str_detect(species, "candida albicans") |
+        str_detect(species, "candida dubliniensis") | 
+        str_detect(species, "entamoeba dispar") | 
+        str_detect(species, "entamoeba histo")
+    ) %>%
+    select(-mix_id, -sim_fcov, -normalized_fcov) %>%
+    expand_grid(sim_fcov = c(0.25,0.5,0.75, 1)) %>%
+    mutate(mix_id = row_number()) %>% 
+    write_csv("sim_loo_mapping.csv")
+
+
+
+
+```

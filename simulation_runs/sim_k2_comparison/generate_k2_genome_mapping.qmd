@@ -1,0 +1,73 @@
+```{r}
+library(cowplot)
+library(httpgd)
+library(gt)
+library(tidyverse)
+library(fs)
+library(yardstick)
+library(RColorBrewer)
+library(vroom)
+
+# using the genbank taxid mapping for exhaustive most accurate species - accession mapping.
+genbank_taxid_acc_mapping <- vroom("archive/eukaryotic_genomes.tsv") %>% 
+    select(species = `Organism Name`, everything()) %>%
+    mutate(
+        species = str_replace_all(species, "[^[:alnum:]]+", "_"), # removes all nonalphanumeric
+        species = str_remove_all(species, "^_+|_+$"), # removes trailing or leading underscore
+        species = tolower(species)
+    ) %>%
+    group_by(species) %>%
+    slice_max(order_by = coalesce(str_detect(`Assembly Accession`, "GCF"), FALSE),n = 1,with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(species = str_replace_all(species, "_", " "))
+
+species_match_genbank_taxid_acc_mapping <- genbank_taxid_acc_mapping %>%
+    mutate(species = word(species, 1, 2)) %>%
+    select(-`Organism Taxonomic ID`) %>%
+    group_by(species) %>%
+    slice(1) %>%
+    ungroup()
+
+ls_df <- 
+    vroom("/storage/home/hcoda1/1/jshih41/scratch/final_eukdetect2_sims/simulation_runs/sim_all_euk_genome_mixtures/euk_ls.txt", col_names = "full_acc", delim = "\t") %>%
+        mutate(acc = str_extract(full_acc, "^[^_]*_[^_]*")) %>%
+        mutate(full_acc = str_replace(full_acc, ".fna", "")) %>%
+        distinct(acc, .keep_all = TRUE)
+
+k2_db_mapping_final <- 
+vroom("kraken_euk_sp_to_use.txt", col_names = c("taxid", "species")) %>%
+    left_join(genbank_taxid_acc_mapping %>% select(-species), by = c("taxid" = "Organism Taxonomic ID")) %>%
+    mutate(
+        species = str_replace_all(species, "[^[:alnum:]]+", "_"), # removes all nonalphanumeric
+        species = str_remove_all(species, "^_+|_+$"), # removes trailing or leading underscore
+        species = tolower(species)
+    ) %>%
+    mutate(species = str_replace_all(species, "_", " ")) %>% 
+    mutate(species = ifelse(species == "kwoniella mangrovensis", "kwoniella mangroviensis", species)) %>%
+    left_join(species_match_genbank_taxid_acc_mapping, by = c("species")) %>%
+    mutate(acc = coalesce(`Assembly Accession.x`, `Assembly Accession.y`)) %>%
+    select(-`Assembly Accession.x`, -`Assembly Accession.y`) %>%
+    filter(!is.na(acc)) %>% # removes haslea ostrearia (not in ncbi genomes)
+    left_join(ls_df, by = "acc")
+
+
+set.seed(123)
+mapping_out <- 
+purrr::map_dfr(seq_len(1000), function(id) {
+    k2_db_mapping_final %>%
+        slice_sample(n = 10) %>%
+        mutate(mix_id = id)
+}) %>%
+    group_by(mix_id) %>%
+    mutate(
+        sim_fcov = exp(runif(n(), log(1e-5), log(1))),
+        normalized_fcov = sim_fcov / sum(sim_fcov)
+    ) %>%
+    ungroup() %>%
+    select(full_acc, mix_id, sim_fcov, normalized_fcov, everything())
+
+mapping_out %>%
+    write_csv("k2_sim_genome_mapping.csv")
+
+
+```

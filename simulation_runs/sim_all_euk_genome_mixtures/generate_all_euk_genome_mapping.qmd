@@ -1,0 +1,84 @@
+```{r}
+library(cowplot)
+library(httpgd)
+library(gt)
+library(tidyverse)
+library(fs)
+library(yardstick)
+library(RColorBrewer)
+library(vroom)
+
+
+# final methods for all euk genome simulation
+
+# using the genbank taxid mapping for exhaustive most accurate species - accession mapping.
+genbank_taxid_acc_mapping <- vroom("archive/eukaryotic_genomes.tsv") %>% 
+    select(species = `Organism Name`, everything()) %>%
+    mutate(
+        species = str_replace_all(species, "[^[:alnum:]]+", "_"), # removes all nonalphanumeric
+        species = str_remove_all(species, "^_+|_+$"), # removes trailing or leading underscore
+        species = tolower(species)
+    ) %>%
+    group_by(species) %>%
+    slice_max(order_by = coalesce(str_detect(`Assembly Accession`, "GCF"), FALSE),n = 1,with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(species = str_replace_all(species, "_", " "))
+
+
+# getting the genomes in eukdetect2 db
+all_eukdetect_genomes <- 
+vroom("/storage/project/r-alind6-0/shared/data_swap/johnathan/eukdb_v5/busco_taxid_genome_link.txt", col_names = c("busco", "taxid", "species")) %>%
+    select(-busco) %>% 
+    filter(!is.na(species)) %>%
+    distinct(species, taxid) %>%
+    mutate(
+        species = str_replace_all(species, "[^[:alnum:]]+", "_"),
+        species = str_remove_all(species, "^_+|_+$"),
+        species = tolower(species)
+    ) %>%
+    select(eukdetect_db_species = species, taxid) %>%
+    mutate(eukdetect_db_species = str_replace_all(eukdetect_db_species, "_", " "))
+
+# merging based on taxid
+merged_genbank_eukdetect2 <- all_eukdetect_genomes %>% 
+    semi_join(genbank_taxid_acc_mapping, by = c("taxid" = "Organism Taxonomic ID")) %>%
+    left_join(genbank_taxid_acc_mapping, by = c("taxid" = "Organism Taxonomic ID")) %>%
+    select(eukdetect_db_species, taxid, species, acc = `Assembly Accession`)
+
+
+ls_df <- 
+    vroom("/storage/home/hcoda1/1/jshih41/scratch/final_eukdetect2_sims/simulation_runs/sim_all_euk_genome_mixtures/euk_ls.txt", col_names = "full_acc", delim = "\t") %>%
+        mutate(acc = str_extract(full_acc, "^[^_]*_[^_]*")) %>%
+        mutate(full_acc = str_replace(full_acc, ".fna", "")) %>%
+        distinct(acc, .keep_all = TRUE)
+
+
+all_euk_genome_mapping_final <- merged_genbank_eukdetect2 %>%
+    select(species = eukdetect_db_species, taxid, acc) %>%
+    distinct(acc, .keep_all = TRUE) %>%
+    filter(!is.na(acc)) %>%
+    left_join(ls_df, by = "acc")
+
+# time to assign a mixture and a simulated coverage
+set.seed(123)
+all_euk_genome_mapping_final %>%
+    slice_sample(prop = 1) %>% # shuffles
+    mutate(mix_id = ceiling(row_number() / 10)) %>%
+    group_by(mix_id) %>%
+    mutate(
+        sim_fcov = exp(runif(n(), log(1e-3), log(1))),
+        normalized_fcov = sim_fcov / sum(sim_fcov)
+    ) %>%
+    ungroup() %>%
+    write_csv("all_euk_genome_mapping.csv")
+
+
+# simulated coverages are being simualted at a log uniform distirbution from 0.001 to 1.
+vroom("simulation_runs/sim_all_euk_genome_mixtures/all_euk_genome_mapping.csv") %>%
+    ggplot(aes(x = sim_fcov)) + 
+        geom_histogram(bins = 100) +
+        scale_x_log10()
+
+
+
+```
